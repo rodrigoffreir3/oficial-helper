@@ -1,0 +1,89 @@
+:root {
+  /* Cores Padrão Apple iOS Light */
+  --text: #1c1c1e;
+  --text-secondary: #8e8e93;
+  --accent: #007aff;
+
+  /* EFEITO GLASS EQUILIBRADO */
+  /* Reduzi drasticamente o branco do lado esquerdo (de 0.7 para 0.35) para replicar o efeito do lado direito */
+  --glass-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.15) 100%);
+
+  /* Borda unificada e translúcida para não sumir no fundo claro */
+  --glass-border: rgba(255, 255, 255, 0.5);
+
+  /* Sombra mantida para descolar o vidro do fundo */
+  --glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font: 16px/145% var(--sans);
+  color-scheme: light;
+  color: var(--text);
+}
+
+body {
+  margin: 0;
+  /* Fundo base pouquíssima coisa mais cinza para o vidro branco brilhar */
+  background-color: #e8e8ed;
+
+  /* Gradientes originais intactos */
+  background-image:
+    radial-gradient(circle at 0% 0%, rgba(170, 210, 255, 1) 0px, transparent 65%),
+    radial-gradient(circle at 100% 0%, rgba(255, 190, 230, 1) 0px, transparent 65%),
+    radial-gradient(circle at 100% 100%, rgba(180, 230, 255, 1) 0px, transparent 65%),
+    radial-gradient(circle at 0% 100%, rgba(220, 190, 255, 1) 0px, transparent 65%);
+
+  background-attachment: fixed;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* === CLASSES PREMIUM GLASSMORPHISM === */
+
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(32px) saturate(200%);
+  -webkit-backdrop-filter: blur(32px) saturate(200%);
+
+  /* Borda uniforme para o contorno não sumir em nenhum dos lados */
+  border: 1px solid var(--glass-border);
+
+  /* A MÁGICA: Além da sombra externa, uma sombra interna (inset) branca para dar a espessura exata do vidro */
+  box-shadow: var(--glass-shadow), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+}
+
+.glass-input {
+  /* Input com efeito de vidro temperado escavado */
+  background: rgba(255, 255, 255, 0.35);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 14px;
+  padding: 14px;
+  font-size: 16px;
+  color: var(--text);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  transition: all 0.2s ease;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.glass-input:focus {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.25);
+}
+
+.btn-ios {
+  border-radius: 14px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn-ios:active {
+  transform: scale(0.96);
+  opacity: 0.8;
+}
