@@ -1,12 +1,26 @@
 import { useState, useEffect } from 'react';
 import { useHighPrecisionGPS } from './hooks/useHighPrecisionGPS';
-import { db, type DiligenciaLocal } from './store/db';
-import { syncPendentes } from './services/sync';
+import { db } from './store/firebase';
+import { collection, getDocs, addDoc, updateDoc, doc, query, orderBy, writeBatch } from 'firebase/firestore';
+
+// Definimos o tipo direto aqui agora
+export interface Diligencia {
+  id?: string;
+  nome_alvo: string;
+  telefone: string;
+  numero_mandado: string;
+  latitude: number;
+  longitude: number;
+  precisao: number;
+  status: string;
+  observacao: string;
+  created_at: string;
+}
 
 function App() {
   // 1. Hooks customizados e Estado da Interface
   const { data: gpsData, error: gpsError, loading: gpsLoading, captureLocation } = useHighPrecisionGPS();
-  const [diligencias, setDiligencias] = useState<DiligenciaLocal[]>([]);
+  const [diligencias, setDiligencias] = useState<Diligencia[]>([]);
   const [totalContatos, setTotalContatos] = useState(0);
 
   // Estado do Formulário Novo
@@ -20,30 +34,41 @@ function App() {
   const [mostrarLista, setMostrarLista] = useState(false);
   const [contatoExpandidoId, setContatoExpandidoId] = useState<string | null>(null);
 
-  // 2. Carrega o histórico (com filtro de busca opcional)
+  // 2. Carrega o histórico do Firestore
   const carregarDiligencias = async (termoDeBusca = busca) => {
-    const todos = await db.diligencias.orderBy('created_at').reverse().toArray();
-    setTotalContatos(todos.length);
+    try {
+      const q = query(collection(db, "diligencias"), orderBy("created_at", "desc"));
+      const querySnapshot = await getDocs(q);
 
-    if (termoDeBusca) {
-      const lowerTerm = termoDeBusca.toLowerCase();
-      const filtrados = todos.filter(d =>
-        d.nome_alvo.toLowerCase().includes(lowerTerm) ||
-        d.telefone.includes(termoDeBusca)
-      );
-      setDiligencias(filtrados);
-      setMostrarLista(true);
-    } else {
-      setDiligencias(todos);
+      const todos: Diligencia[] = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Diligencia[];
+
+      setTotalContatos(todos.length);
+
+      if (termoDeBusca) {
+        const lowerTerm = termoDeBusca.toLowerCase();
+        const filtrados = todos.filter(d =>
+          d.nome_alvo.toLowerCase().includes(lowerTerm) ||
+          d.telefone.includes(termoDeBusca)
+        );
+        setDiligencias(filtrados);
+        setMostrarLista(true);
+      } else {
+        setDiligencias(todos);
+      }
+    } catch (error) {
+      console.error("Erro ao buscar diligências: ", error);
     }
   };
 
   useEffect(() => {
     carregarDiligencias();
-    syncPendentes().then(() => carregarDiligencias());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 3. Ação Principal: Criar NOVO registro do zero
+  // 3. Ação Principal: Criar NOVO registro direto no Firestore
   const handleSalvarNovo = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -52,8 +77,7 @@ function App() {
       return;
     }
 
-    const novoRegistro: DiligenciaLocal = {
-      id: crypto.randomUUID(),
+    const novoRegistro = {
       nome_alvo: nome,
       telefone: telefone,
       numero_mandado: mandado,
@@ -62,19 +86,22 @@ function App() {
       precisao: gpsData.accuracy,
       status: 'pendente',
       observacao: observacao,
-      created_at: new Date().toISOString(),
-      synced: 0
+      created_at: new Date().toISOString()
     };
 
-    await db.diligencias.add(novoRegistro);
+    try {
+      await addDoc(collection(db, "diligencias"), novoRegistro);
 
-    setNome('');
-    setTelefone('');
-    setMandado('');
-    setObservacao('');
+      setNome('');
+      setTelefone('');
+      setMandado('');
+      setObservacao('');
 
-    await syncPendentes();
-    carregarDiligencias();
+      carregarDiligencias();
+    } catch (error) {
+      console.error("Erro ao salvar: ", error);
+      alert("Erro ao salvar o registro.");
+    }
   };
 
   // 4. Ação Secundária: Atualizar contato importado que estava sem GPS
@@ -84,18 +111,21 @@ function App() {
       return;
     }
 
-    await db.diligencias.update(idContato, {
-      latitude: gpsData.latitude,
-      longitude: gpsData.longitude,
-      precisao: gpsData.accuracy,
-      synced: 0
-    });
+    try {
+      const contatoRef = doc(db, "diligencias", idContato);
+      await updateDoc(contatoRef, {
+        latitude: gpsData.latitude,
+        longitude: gpsData.longitude,
+        precisao: gpsData.accuracy
+      });
 
-    await syncPendentes();
-    carregarDiligencias();
+      carregarDiligencias();
+    } catch (error) {
+      console.error("Erro ao vincular GPS: ", error);
+    }
   };
 
-  // 5. Utilitários (Importar CSV e Abrir Mapas)
+  // 5. Utilitários (Importar CSV em Lote para o Firestore)
   const handleImportarCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -104,33 +134,40 @@ function App() {
     reader.onload = async (event) => {
       const text = event.target?.result as string;
       const lines = text.split('\n');
-      const novosContatos: DiligenciaLocal[] = [];
 
-      for (const line of lines) {
-        const [csvNome, csvTel] = line.split(',');
+      try {
+        // Usamos batch para gravar vários contatos de uma vez no Firebase
+        const batch = writeBatch(db);
+        let contagem = 0;
 
-        if (csvNome && csvNome.trim() !== '') {
-          novosContatos.push({
-            id: crypto.randomUUID(),
-            nome_alvo: csvNome.trim(),
-            telefone: csvTel ? csvTel.trim() : '',
-            numero_mandado: '',
-            latitude: 0,
-            longitude: 0,
-            precisao: 0,
-            status: 'pendente',
-            observacao: 'Importado da base antiga',
-            created_at: new Date().toISOString(),
-            synced: 0
-          });
+        for (const line of lines) {
+          const [csvNome, csvTel] = line.split(',');
+
+          if (csvNome && csvNome.trim() !== '') {
+            const docRef = doc(collection(db, "diligencias"));
+            batch.set(docRef, {
+              nome_alvo: csvNome.trim(),
+              telefone: csvTel ? csvTel.trim() : '',
+              numero_mandado: '',
+              latitude: 0,
+              longitude: 0,
+              precisao: 0,
+              status: 'pendente',
+              observacao: 'Importado da base antiga',
+              created_at: new Date().toISOString()
+            });
+            contagem++;
+          }
         }
-      }
 
-      if (novosContatos.length > 0) {
-        await db.diligencias.bulkAdd(novosContatos);
-        carregarDiligencias();
-        syncPendentes();
-        alert(`${novosContatos.length} contatos importados com sucesso!`);
+        if (contagem > 0) {
+          await batch.commit();
+          carregarDiligencias();
+          alert(`${contagem} contatos importados com sucesso!`);
+        }
+      } catch (error) {
+        console.error("Erro ao importar CSV: ", error);
+        alert("Ocorreu um erro ao importar a lista.");
       }
     };
     reader.readAsText(file);
@@ -282,12 +319,11 @@ function App() {
             return (
               <div key={d.id} className="glass-panel" style={{
                 overflow: 'hidden',
-                // Leve matiz amarela no vidro se faltar GPS
                 background: faltaGps ? 'rgba(255, 204, 0, 0.15)' : 'var(--glass-bg)'
               }}>
 
                 <div
-                  onClick={() => toggleContato(d.id)}
+                  onClick={() => toggleContato(d.id as string)}
                   style={{ padding: '18px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                 >
                   <h4 style={{ margin: 0, fontSize: '16px', fontWeight: '500' }}>{d.nome_alvo}</h4>
@@ -300,13 +336,14 @@ function App() {
 
                     <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: '#8e8e93' }}>
                       {new Date(d.created_at).toLocaleDateString('pt-BR')}
-                      {d.synced === 1 ? ' • ☁️ Nuvem' : ' • 📱 Aparelho'}
+                      {/* Firebase sincroniza sozinho, então podemos assumir que está na Nuvem */}
+                      {' • ☁️ Firebase Sync'}
                     </p>
 
                     {faltaGps ? (
                       <button
                         className="btn-ios"
-                        onClick={() => vincularGpsAoContato(d.id)}
+                        onClick={() => vincularGpsAoContato(d.id as string)}
                         style={{ padding: '14px', width: '100%', background: '#ffcc00', color: '#000', fontSize: '15px' }}
                       >
                         📍 Vincular Coordenada a este Contato
