@@ -16,7 +16,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22' # Atualizado para atender a exigência do Capacitor novo
+          node-version: '22'
 
       - name: Instalar Dependências e Fazer Build Web
         working-directory: ./web
@@ -35,11 +35,11 @@ jobs:
         working-directory: ./web
         run: npx cap sync android
 
-      - name: Setup Java JDK 17
+      - name: Setup Java JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21' # <-- AQUI ESTÁ A MÁGICA, atualizado para Java 21
 
       - name: Compilar APK no Gradle
         working-directory: ./web/android
