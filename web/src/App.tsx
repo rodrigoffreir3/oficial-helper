@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useHighPrecisionGPS } from './hooks/useHighPrecisionGPS';
 import { db } from './store/firebase';
 import { collection, getDocs, addDoc, updateDoc, doc, query, orderBy, writeBatch } from 'firebase/firestore';
+import { Contacts } from '@capacitor-community/contacts';
 
 // Definimos o tipo direto aqui agora
 export interface Diligencia {
@@ -125,53 +126,76 @@ function App() {
     }
   };
 
-  // 5. Utilitários (Importar CSV em Lote para o Firestore)
-  const handleImportarCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const text = event.target?.result as string;
-      const lines = text.split('\n');
-
-      try {
-        // Usamos batch para gravar vários contatos de uma vez no Firebase
-        const batch = writeBatch(db);
-        let contagem = 0;
-
-        for (const line of lines) {
-          const [csvNome, csvTel] = line.split(',');
-
-          if (csvNome && csvNome.trim() !== '') {
-            const docRef = doc(collection(db, "diligencias"));
-            batch.set(docRef, {
-              nome_alvo: csvNome.trim(),
-              telefone: csvTel ? csvTel.trim() : '',
-              numero_mandado: '',
-              latitude: 0,
-              longitude: 0,
-              precisao: 0,
-              status: 'pendente',
-              observacao: 'Importado da base antiga',
-              created_at: new Date().toISOString()
-            });
-            contagem++;
-          }
-        }
-
-        if (contagem > 0) {
-          await batch.commit();
-          carregarDiligencias();
-          alert(`${contagem} contatos importados com sucesso!`);
-        }
-      } catch (error) {
-        console.error("Erro ao importar CSV: ", error);
-        alert("Ocorreu um erro ao importar a lista.");
+  // 5. NOVA FUNÇÃO: Sincronizar contatos nativos do celular em Lotes (Anti-travamento)
+  const sincronizarAgenda = async () => {
+    try {
+      // Pede permissão ao Android
+      const perm = await Contacts.requestPermissions();
+      if (perm.contacts !== 'granted') {
+        alert('Você precisa permitir o acesso aos contatos para sincronizar.');
+        return;
       }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
+
+      alert('Lendo agenda... Isso pode levar alguns segundos dependendo da quantidade de contatos.');
+
+      // Puxa os contatos do telefone
+      const result = await Contacts.getContacts({
+        projection: { name: true, phones: true }
+      });
+
+      // Trava anti-duplicação: cria uma lista com os nomes que já temos no Firebase
+      const nomesExistentes = new Set(diligencias.map(d => d.nome_alvo.trim().toLowerCase()));
+
+      const novosContatos = result.contacts.filter(c => {
+        const nomeContato = c.name?.display;
+        if (!nomeContato) return false; // Ignora contatos sem nome
+        // Só passa se o nome AINDA NÃO EXISTE no nosso banco
+        return !nomesExistentes.has(nomeContato.trim().toLowerCase());
+      });
+
+      if (novosContatos.length === 0) {
+        alert('Tudo atualizado! Nenhum contato novo encontrado na agenda.');
+        return;
+      }
+
+      // Fatiamento em lotes de 490 para respeitar o limite do Firebase
+      const TAMANHO_LOTE = 490;
+      let contagem = 0;
+
+      for (let i = 0; i < novosContatos.length; i += TAMANHO_LOTE) {
+        const pedaco = novosContatos.slice(i, i + TAMANHO_LOTE);
+        const batch = writeBatch(db);
+
+        for (const c of pedaco) {
+          const nome = c.name?.display || 'Sem Nome';
+          const tel = (c.phones && c.phones.length > 0) ? c.phones[0].number : '';
+
+          const docRef = doc(collection(db, "diligencias"));
+          batch.set(docRef, {
+            nome_alvo: nome,
+            telefone: tel,
+            numero_mandado: '',
+            latitude: 0,
+            longitude: 0,
+            precisao: 0,
+            status: 'pendente',
+            observacao: 'Sincronizado da agenda do celular',
+            created_at: new Date().toISOString()
+          });
+          contagem++;
+        }
+
+        // Dispara o lote para o Firebase
+        await batch.commit();
+      }
+
+      carregarDiligencias();
+      alert(`${contagem} novos contatos sincronizados com sucesso!`);
+
+    } catch (error) {
+      console.error(error);
+      alert('Erro ao tentar ler a agenda do celular.');
+    }
   };
 
   const abrirWaze = (lat: number, lng: number) => {
@@ -268,10 +292,14 @@ function App() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
         <h3 style={{ margin: 0, fontSize: '22px', fontWeight: '600' }}>Meus Contatos</h3>
 
-        <label className="btn-ios" style={{ background: '#e5e5ea', color: '#1c1c1e', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}>
-          📂 Importar CSV
-          <input type="file" accept=".csv" onChange={handleImportarCSV} style={{ display: 'none' }} />
-        </label>
+        {/* NOVO BOTÃO DE SINCRONIZAÇÃO NATIVA */}
+        <button
+          onClick={sincronizarAgenda}
+          className="btn-ios"
+          style={{ background: '#34c759', color: '#fff', padding: '8px 14px', fontSize: '13px', fontWeight: 'bold' }}
+        >
+          📱 Sincronizar Agenda
+        </button>
       </div>
 
       <input
@@ -336,7 +364,6 @@ function App() {
 
                     <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: '#8e8e93' }}>
                       {new Date(d.created_at).toLocaleDateString('pt-BR')}
-                      {/* Firebase sincroniza sozinho, então podemos assumir que está na Nuvem */}
                       {' • ☁️ Firebase Sync'}
                     </p>
 
